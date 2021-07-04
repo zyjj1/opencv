@@ -56,6 +56,15 @@ public:
         cv::MediaFrame::View::Strides ss = { m_mat.step, 0u, 0u, 0u };
         return cv::MediaFrame::View(std::move(pp), std::move(ss), Cb{m_cb});
     }
+    cv::util::any blobParams() const override {
+        return std::make_pair<InferenceEngine::TensorDesc,
+                              InferenceEngine::ParamMap>({IE::Precision::U8,
+                                                          {1, 3, 300, 300},
+                                                          IE::Layout::NCHW},
+                                                         {{"HELLO", 42},
+                                                          {"COLOR_FORMAT",
+                                                           InferenceEngine::ColorFormat::NV12}});
+    }
 };
 
 class TestMediaNV12 final: public cv::MediaFrame::IAdapter {
@@ -489,6 +498,126 @@ struct ROIListNV12: public ::testing::Test {
     }
 };
 
+struct SingleROI: public ::testing::Test {
+    cv::gapi::ie::detail::ParamDesc params;
+
+    cv::Mat m_in_mat;
+    cv::Rect m_roi;
+
+    cv::Mat m_out_gapi_age;
+    cv::Mat m_out_gapi_gender;
+
+    cv::Mat m_out_ie_age;
+    cv::Mat m_out_ie_gender;
+
+    void SetUp() {
+        initDLDTDataPath();
+        params.model_path = findDataFile(SUBDIR + "age-gender-recognition-retail-0013.xml");
+        params.weights_path = findDataFile(SUBDIR + "age-gender-recognition-retail-0013.bin");
+        params.device_id = "CPU";
+
+        // FIXME: it must be cv::imread(findDataFile("../dnn/grace_hopper_227.png", false));
+        m_in_mat = cv::Mat(cv::Size(320, 240), CV_8UC3);
+        cv::randu(m_in_mat, 0, 255);
+
+        m_roi = cv::Rect(cv::Point{64, 60}, cv::Size{96, 96});
+
+        // Load & run IE network
+        IE::Blob::Ptr ie_age, ie_gender;
+        {
+            auto plugin        = cv::gimpl::ie::wrap::getPlugin(params);
+            auto net           = cv::gimpl::ie::wrap::readNetwork(params);
+            setNetParameters(net);
+            auto this_network  = cv::gimpl::ie::wrap::loadNetwork(plugin, net, params);
+            auto infer_request = this_network.CreateInferRequest();
+
+            const auto ie_rc = IE::ROI {
+                    0u
+                    , static_cast<std::size_t>(m_roi.x)
+                    , static_cast<std::size_t>(m_roi.y)
+                    , static_cast<std::size_t>(m_roi.width)
+                    , static_cast<std::size_t>(m_roi.height)
+            };
+
+            IE::Blob::Ptr roi_blob = IE::make_shared_blob(cv::gapi::ie::util::to_ie(m_in_mat), ie_rc);
+            infer_request.SetBlob("data", roi_blob);
+            infer_request.Infer();
+
+            using namespace cv::gapi::ie::util;
+            m_out_ie_age    = to_ocv(infer_request.GetBlob("age_conv3")).clone();
+            m_out_ie_gender = to_ocv(infer_request.GetBlob("prob")).clone();
+        }
+    }
+
+    void validate() {
+        // Validate with IE itself (avoid DNN module dependency here)
+        normAssert(m_out_ie_age   , m_out_gapi_age   , "Test age output");
+        normAssert(m_out_ie_gender, m_out_gapi_gender, "Test gender output");
+    }
+};
+
+struct SingleROINV12: public ::testing::Test {
+    cv::gapi::ie::detail::ParamDesc params;
+
+    cv::Mat m_in_y;
+    cv::Mat m_in_uv;
+    cv::Rect m_roi;
+
+    cv::Mat m_out_gapi_age;
+    cv::Mat m_out_gapi_gender;
+
+    cv::Mat m_out_ie_age;
+    cv::Mat m_out_ie_gender;
+
+    void SetUp() {
+        initDLDTDataPath();
+        params.model_path = findDataFile(SUBDIR + "age-gender-recognition-retail-0013.xml");
+        params.weights_path = findDataFile(SUBDIR + "age-gender-recognition-retail-0013.bin");
+        params.device_id = "CPU";
+
+        cv::Size sz{320, 240};
+        m_in_y = cv::Mat{sz, CV_8UC1};
+        cv::randu(m_in_y, 0, 255);
+        m_in_uv = cv::Mat{sz / 2, CV_8UC2};
+        cv::randu(m_in_uv, 0, 255);
+
+        m_roi = cv::Rect(cv::Point{64, 60}, cv::Size{96, 96});
+
+        // Load & run IE network
+        IE::Blob::Ptr ie_age, ie_gender;
+        {
+            auto plugin        = cv::gimpl::ie::wrap::getPlugin(params);
+            auto net           = cv::gimpl::ie::wrap::readNetwork(params);
+            setNetParameters(net, /* NV12 */ true);
+            auto this_network  = cv::gimpl::ie::wrap::loadNetwork(plugin, net, params);
+            auto infer_request = this_network.CreateInferRequest();
+            auto blob = cv::gapi::ie::util::to_ie(m_in_y, m_in_uv);
+
+            const auto ie_rc = IE::ROI {
+                    0u
+                    , static_cast<std::size_t>(m_roi.x)
+                    , static_cast<std::size_t>(m_roi.y)
+                    , static_cast<std::size_t>(m_roi.width)
+                    , static_cast<std::size_t>(m_roi.height)
+            };
+
+            IE::Blob::Ptr roi_blob = IE::make_shared_blob(blob, ie_rc);
+            infer_request.SetBlob("data", roi_blob);
+            infer_request.Infer();
+
+            using namespace cv::gapi::ie::util;
+            m_out_ie_age    = to_ocv(infer_request.GetBlob("age_conv3")).clone();
+            m_out_ie_gender = to_ocv(infer_request.GetBlob("prob")).clone();
+        }
+    }
+
+    void validate() {
+        // Validate with IE itself (avoid DNN module dependency here)
+        normAssert(m_out_ie_age   , m_out_gapi_age   , "Test age output");
+        normAssert(m_out_ie_gender, m_out_gapi_gender, "Test gender output");
+    }
+};
+
 TEST_F(ROIList, TestInfer)
 {
     cv::GArray<cv::Rect> rr;
@@ -501,8 +630,8 @@ TEST_F(ROIList, TestInfer)
         params.model_path, params.weights_path, params.device_id
     }.cfgOutputLayers({ "age_conv3", "prob" });
     comp.apply(cv::gin(m_in_mat, m_roi_list),
-               cv::gout(m_out_gapi_ages, m_out_gapi_genders),
-               cv::compile_args(cv::gapi::networks(pp)));
+            cv::gout(m_out_gapi_ages, m_out_gapi_genders),
+            cv::compile_args(cv::gapi::networks(pp)));
     validate();
 }
 
@@ -1062,6 +1191,234 @@ TEST_F(ROIListNV12, Infer2MediaInputNV12)
     validate();
 }
 
+TEST_F(SingleROI, GenericInfer)
+{
+    // Configure & run G-API
+    cv::GMat in;
+    cv::GOpaque<cv::Rect> roi;
+    cv::GInferInputs inputs;
+    inputs["data"] = in;
+
+    auto outputs = cv::gapi::infer<cv::gapi::Generic>("age-gender-generic", roi, inputs);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, roi), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    comp.apply(cv::gin(m_in_mat, m_roi), cv::gout(m_out_gapi_age, m_out_gapi_gender),
+            cv::compile_args(cv::gapi::networks(pp)));
+
+    validate();
+}
+
+TEST_F(SingleROI, GenericInferMediaBGR)
+{
+    // Configure & run G-API
+    cv::GFrame in;
+    cv::GOpaque<cv::Rect> roi;
+    cv::GInferInputs inputs;
+    inputs["data"] = in;
+
+    auto outputs = cv::gapi::infer<cv::gapi::Generic>("age-gender-generic", roi, inputs);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, roi), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    auto frame = MediaFrame::Create<TestMediaBGR>(m_in_mat);
+    comp.apply(cv::gin(frame, m_roi), cv::gout(m_out_gapi_age, m_out_gapi_gender),
+            cv::compile_args(cv::gapi::networks(pp)));
+
+    validate();
+}
+
+TEST_F(SingleROINV12, GenericInferMediaNV12)
+{
+    // Configure & run G-API
+    cv::GFrame in;
+    cv::GOpaque<cv::Rect> roi;
+    cv::GInferInputs inputs;
+    inputs["data"] = in;
+
+    auto outputs = cv::gapi::infer<cv::gapi::Generic>("age-gender-generic", roi, inputs);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, roi), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    auto frame = MediaFrame::Create<TestMediaNV12>(m_in_y, m_in_uv);
+    comp.apply(cv::gin(frame, m_roi), cv::gout(m_out_gapi_age, m_out_gapi_gender),
+            cv::compile_args(cv::gapi::networks(pp)));
+
+    validate();
+}
+
+TEST_F(ROIList, GenericInfer)
+{
+    cv::GMat in;
+    cv::GArray<cv::Rect> rr;
+    cv::GInferInputs inputs;
+    inputs["data"] = in;
+
+    auto outputs = cv::gapi::infer<cv::gapi::Generic>("age-gender-generic", rr, inputs);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, rr), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    comp.apply(cv::gin(m_in_mat, m_roi_list),
+            cv::gout(m_out_gapi_ages, m_out_gapi_genders),
+            cv::compile_args(cv::gapi::networks(pp)));
+
+    validate();
+}
+
+TEST_F(ROIList, GenericInferMediaBGR)
+{
+    cv::GFrame in;
+    cv::GArray<cv::Rect> rr;
+    cv::GInferInputs inputs;
+    inputs["data"] = in;
+
+    auto outputs = cv::gapi::infer<cv::gapi::Generic>("age-gender-generic", rr, inputs);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, rr), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    auto frame = MediaFrame::Create<TestMediaBGR>(m_in_mat);
+    comp.apply(cv::gin(frame, m_roi_list),
+            cv::gout(m_out_gapi_ages, m_out_gapi_genders),
+            cv::compile_args(cv::gapi::networks(pp)));
+
+    validate();
+}
+
+TEST_F(ROIListNV12, GenericInferMediaNV12)
+{
+    cv::GFrame in;
+    cv::GArray<cv::Rect> rr;
+    cv::GInferInputs inputs;
+    inputs["data"] = in;
+
+    auto outputs = cv::gapi::infer<cv::gapi::Generic>("age-gender-generic", rr, inputs);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, rr), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    auto frame = MediaFrame::Create<TestMediaNV12>(m_in_y, m_in_uv);
+    comp.apply(cv::gin(frame, m_roi_list),
+            cv::gout(m_out_gapi_ages, m_out_gapi_genders),
+            cv::compile_args(cv::gapi::networks(pp)));
+
+    validate();
+}
+
+TEST_F(ROIList, GenericInfer2)
+{
+    cv::GArray<cv::Rect> rr;
+    cv::GMat in;
+    GInferListInputs list;
+    list["data"] = rr;
+
+    auto outputs = cv::gapi::infer2<cv::gapi::Generic>("age-gender-generic", in, list);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, rr), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    comp.apply(cv::gin(m_in_mat, m_roi_list),
+            cv::gout(m_out_gapi_ages, m_out_gapi_genders),
+            cv::compile_args(cv::gapi::networks(pp)));
+    validate();
+}
+
+TEST_F(ROIList, GenericInfer2MediaInputBGR)
+{
+    cv::GArray<cv::Rect> rr;
+    cv::GFrame in;
+    GInferListInputs inputs;
+    inputs["data"] = rr;
+
+    auto outputs = cv::gapi::infer2<cv::gapi::Generic>("age-gender-generic", in, inputs);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, rr), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    auto frame = MediaFrame::Create<TestMediaBGR>(m_in_mat);
+    comp.apply(cv::gin(frame, m_roi_list),
+            cv::gout(m_out_gapi_ages, m_out_gapi_genders),
+            cv::compile_args(cv::gapi::networks(pp)));
+    validate();
+}
+
+TEST_F(ROIListNV12, GenericInfer2MediaInputNV12)
+{
+    cv::GArray<cv::Rect> rr;
+    cv::GFrame in;
+    GInferListInputs inputs;
+    inputs["data"] = rr;
+
+    auto outputs = cv::gapi::infer2<cv::gapi::Generic>("age-gender-generic", in, inputs);
+    auto age     = outputs.at("age_conv3");
+    auto gender  = outputs.at("prob");
+
+    cv::GComputation comp(cv::GIn(in, rr), cv::GOut(age, gender));
+
+    cv::gapi::ie::Params<cv::gapi::Generic> pp{
+        "age-gender-generic", params.model_path, params.weights_path, params.device_id
+    };
+    pp.cfgNumRequests(2u);
+
+    auto frame = MediaFrame::Create<TestMediaNV12>(m_in_y, m_in_uv);
+    comp.apply(cv::gin(frame, m_roi_list),
+            cv::gout(m_out_gapi_ages, m_out_gapi_genders),
+            cv::compile_args(cv::gapi::networks(pp)));
+    validate();
+}
+
 TEST(Infer, SetInvalidNumberOfRequests)
 {
     using AGInfo = std::tuple<cv::GMat, cv::GMat>;
@@ -1255,7 +1612,6 @@ TEST(InferList, TestStreamingInfer)
     }.cfgOutputLayers({ "age_conv3", "prob" })
      .cfgNumRequests(4u);
 
-
     std::size_t num_frames = 0u;
     std::size_t max_frames = 10u;
 
@@ -1308,7 +1664,6 @@ TEST(InferList, TestStreamingInfer)
         ++num_frames;
         cap >> in_mat;
     }
-    pipeline.stop();
 }
 
 TEST(Infer2, TestStreamingInfer)
@@ -1659,6 +2014,44 @@ TEST_F(InferWithReshapeNV12, TestInferListYUV)
     // Validate
     validate();
 }
+
+TEST_F(ROIList, CallInferMultipleTimes)
+{
+    cv::GArray<cv::Rect> rr;
+    cv::GMat in;
+    cv::GArray<cv::GMat> age, gender;
+    std::tie(age, gender) = cv::gapi::infer<AgeGender>(rr, in);
+    cv::GComputation comp(cv::GIn(in, rr), cv::GOut(age, gender));
+
+    auto pp = cv::gapi::ie::Params<AgeGender> {
+        params.model_path, params.weights_path, params.device_id
+    }.cfgOutputLayers({ "age_conv3", "prob" });
+
+    auto cc = comp.compile(cv::descr_of(cv::gin(m_in_mat, m_roi_list)),
+                           cv::compile_args(cv::gapi::networks(pp)));
+
+    for (int i = 0; i < 10; ++i) {
+        cc(cv::gin(m_in_mat, m_roi_list), cv::gout(m_out_gapi_ages, m_out_gapi_genders));
+    }
+
+    validate();
+}
+
+TEST(IEFrameAdapter, blobParams)
+{
+    cv::Mat bgr = cv::Mat::eye(240, 320, CV_8UC3);
+    cv::MediaFrame frame = cv::MediaFrame::Create<TestMediaBGR>(bgr);
+
+    auto expected = std::make_pair(IE::TensorDesc{IE::Precision::U8, {1, 3, 300, 300},
+                                                  IE::Layout::NCHW},
+                                   IE::ParamMap{{"HELLO", 42}, {"COLOR_FORMAT",
+                                                                IE::ColorFormat::NV12}});
+
+    auto actual = cv::util::any_cast<decltype(expected)>(frame.blobParams());
+
+    EXPECT_EQ(expected, actual);
+}
+
 } // namespace opencv_test
 
 #endif //  HAVE_INF_ENGINE
