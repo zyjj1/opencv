@@ -169,10 +169,10 @@ static int pyopencv_${name}_set_${member}(pyopencv_${name}_t* p, PyObject *value
 
 
 gen_template_prop_init = Template("""
-    {(char*)"${member}", (getter)pyopencv_${name}_get_${member}, NULL, (char*)"${member}", NULL},""")
+    {(char*)"${export_member_name}", (getter)pyopencv_${name}_get_${member}, NULL, (char*)"${export_member_name}", NULL},""")
 
 gen_template_rw_prop_init = Template("""
-    {(char*)"${member}", (getter)pyopencv_${name}_get_${member}, (setter)pyopencv_${name}_set_${member}, (char*)"${member}", NULL},""")
+    {(char*)"${export_member_name}", (getter)pyopencv_${name}_get_${member}, (setter)pyopencv_${name}_set_${member}, (char*)"${export_member_name}", NULL},""")
 
 gen_template_overloaded_function_call = Template("""
     {
@@ -212,6 +212,17 @@ simple_argtype_mapping = {
     "c_string": ArgTypeInfo("char*", FormatStrings.string, '(char*)""'),
     "string": ArgTypeInfo("std::string", FormatStrings.object, None, True),
     "Stream": ArgTypeInfo("Stream", FormatStrings.object, 'Stream::Null()', True),
+    "UMat": ArgTypeInfo("UMat", FormatStrings.object, 'UMat()', True),  # FIXIT: switch to CV_EXPORTS_W_SIMPLE as UMat is already a some kind of smart pointer
+}
+
+# Set of reserved keywords for Python. Can be acquired via the following call
+# $ python -c "help('keywords')"
+# Keywords that are reserved in C/C++ are excluded because they can not be
+# used as variables identifiers
+python_reserved_keywords = {
+    "True", "None", "False", "as", "assert", "def", "del", "elif", "except", "exec",
+    "finally", "from", "global",  "import", "in", "is", "lambda", "nonlocal",
+    "pass", "print", "raise", "with", "yield"
 }
 
 
@@ -234,11 +245,28 @@ class ClassProp(object):
         if "/RW" in decl[3]:
             self.readonly = False
 
+    @property
+    def export_name(self):
+        if self.name in python_reserved_keywords:
+            return self.name + "_"
+        return self.name
+
+
 class ClassInfo(object):
-    def __init__(self, name, decl=None):
+    def __init__(self, name, decl=None, codegen=None):
+        # Scope name can be a module or other class e.g. cv::SimpleBlobDetector::Params
+        scope_name, self.original_name = name.rsplit(".", 1)
+
+        # In case scope refer the outer class exported with different name
+        if codegen:
+            scope_name = codegen.get_export_scope_name(scope_name)
+        self.scope_name = re.sub(r"^cv\.?", "", scope_name)
+
+        self.export_name = self.original_name
+
+        self.class_id = normalize_class_name(name)
+
         self.cname = name.replace(".", "::")
-        self.name = self.wname = normalize_class_name(name)
-        self.sname = name[name.rfind('.') + 1:]
         self.ismap = False
         self.issimple = False
         self.isalgorithm = False
@@ -248,12 +276,11 @@ class ClassInfo(object):
         self.consts = {}
         self.base = None
         self.constructor = None
-        customname = False
 
         if decl:
             bases = decl[1].split()[1:]
             if len(bases) > 1:
-                print("Note: Class %s has more than 1 base class (not supported by Python C extensions)" % (self.name,))
+                print("Note: Class %s has more than 1 base class (not supported by Python C extensions)" % (self.cname,))
                 print("      Bases: ", " ".join(bases))
                 print("      Only the first base class will be used")
                 #return sys.exit(-1)
@@ -267,21 +294,43 @@ class ClassInfo(object):
 
             for m in decl[2]:
                 if m.startswith("="):
-                    wname = m[1:]
-                    npos = name.rfind('.')
-                    if npos >= 0:
-                        self.wname = normalize_class_name(name[:npos] + '.' + wname)
-                    else:
-                        self.wname = wname
-                    customname = True
+                    # Aliasing only affects the exported class name, not class identifier
+                    self.export_name = m[1:]
                 elif m == "/Map":
                     self.ismap = True
                 elif m == "/Simple":
                     self.issimple = True
             self.props = [ClassProp(p) for p in decl[3]]
 
-        if not customname and self.wname.startswith("Cv"):
-            self.wname = self.wname[2:]
+        if not self.has_export_alias and self.original_name.startswith("Cv"):
+            self.export_name = self.export_name[2:]
+
+    @property
+    def wname(self):
+        if len(self.scope_name) > 0:
+            return self.scope_name.replace(".", "_") + "_" + self.export_name
+
+        return self.export_name
+
+    @property
+    def name(self):
+        return self.class_id
+
+    @property
+    def full_scope_name(self):
+        return "cv." + self.scope_name if len(self.scope_name) else "cv"
+
+    @property
+    def full_export_name(self):
+        return self.full_scope_name + "." + self.export_name
+
+    @property
+    def full_original_name(self):
+        return self.full_scope_name + "." + self.original_name
+
+    @property
+    def has_export_alias(self):
+        return self.export_name != self.original_name
 
     def gen_map_code(self, codegen):
         all_classes = codegen.classes
@@ -314,13 +363,13 @@ class ClassInfo(object):
             else:
                 getset_code.write(gen_template_get_prop.substitute(name=self.name, member=pname, membertype=p.tp, access=access_op))
             if p.readonly:
-                getset_inits.write(gen_template_prop_init.substitute(name=self.name, member=pname))
+                getset_inits.write(gen_template_prop_init.substitute(name=self.name, member=pname, export_member_name=p.export_name))
             else:
                 if self.isalgorithm:
                     getset_code.write(gen_template_set_prop_algo.substitute(name=self.name, cname=self.cname, member=pname, membertype=p.tp, access=access_op))
                 else:
                     getset_code.write(gen_template_set_prop.substitute(name=self.name, member=pname, membertype=p.tp, access=access_op))
-                getset_inits.write(gen_template_rw_prop_init.substitute(name=self.name, member=pname))
+                getset_inits.write(gen_template_rw_prop_init.substitute(name=self.name, member=pname, export_member_name=p.export_name))
 
         methods_code = StringIO()
         methods_inits = StringIO()
@@ -335,9 +384,11 @@ class ClassInfo(object):
             methods_code.write(m.gen_code(codegen))
             methods_inits.write(m.get_tab_entry())
 
-        code = gen_template_type_impl.substitute(name=self.name, wname=self.wname, cname=self.cname,
-            getset_code=getset_code.getvalue(), getset_inits=getset_inits.getvalue(),
-            methods_code=methods_code.getvalue(), methods_inits=methods_inits.getvalue())
+        code = gen_template_type_impl.substitute(name=self.name,
+                                                 getset_code=getset_code.getvalue(),
+                                                 getset_inits=getset_inits.getvalue(),
+                                                 methods_code=methods_code.getvalue(),
+                                                 methods_inits=methods_inits.getvalue())
 
         return code
 
@@ -351,13 +402,15 @@ class ClassInfo(object):
         if self.constructor is not None:
             constructor_name = self.constructor.get_wrapper_name()
 
-        return "CVPY_TYPE({}, {}, {}, {}, {}, {});\n".format(
-            self.wname,
-            self.name,
+        return 'CVPY_TYPE({}, {}, {}, {}, {}, {}, "{}");\n'.format(
+            self.export_name,
+            self.class_id,
             self.cname if self.issimple else "Ptr<{}>".format(self.cname),
-            self.sname if self.issimple else "Ptr",
+            self.original_name if self.issimple else "Ptr",
             baseptr,
-            constructor_name
+            constructor_name,
+            # Leading dot is required to provide correct class naming
+            "." + self.scope_name if len(self.scope_name) > 0 else self.scope_name
         )
 
 
@@ -371,8 +424,11 @@ class ArgInfo(object):
     def __init__(self, arg_tuple):
         self.tp = handle_ptr(arg_tuple[0])
         self.name = arg_tuple[1]
+        if self.name in python_reserved_keywords:
+            self.name += "_"
         self.defval = arg_tuple[2]
         self.isarray = False
+        self.is_smart_ptr = self.tp.startswith('Ptr<')  # FIXIT: handle through modifiers - need to modify parser
         self.arraylen = 0
         self.arraycvt = None
         self.inputarg = True
@@ -666,7 +722,21 @@ class FuncInfo(object):
                 if any(tp in codegen.enums.keys() for tp in tp_candidates):
                     defval0 = "static_cast<%s>(%d)" % (a.tp, 0)
 
-                arg_type_info = simple_argtype_mapping.get(tp, ArgTypeInfo(tp, FormatStrings.object, defval0, True))
+                if tp in simple_argtype_mapping:
+                    arg_type_info = simple_argtype_mapping[tp]
+                else:
+                    if tp in all_classes:
+                        tp_classinfo = all_classes[tp]
+                        cname_of_value = tp_classinfo.cname if tp_classinfo.issimple else "Ptr<{}>".format(tp_classinfo.cname)
+                        arg_type_info = ArgTypeInfo(cname_of_value, FormatStrings.object, defval0, True)
+                        assert not (a.is_smart_ptr and tp_classinfo.issimple), "Can't pass 'simple' type as Ptr<>"
+                        if not a.is_smart_ptr and not tp_classinfo.issimple:
+                            assert amp == ''
+                            amp = '*'
+                    else:
+                        # FIXIT: Ptr_ / vector_ / enums / nested types
+                        arg_type_info = ArgTypeInfo(tp, FormatStrings.object, defval0, True)
+
                 parse_name = a.name
                 if a.py_inputarg:
                     if arg_type_info.strict_conversion:
@@ -811,12 +881,12 @@ class FuncInfo(object):
             classinfo = all_classes[self.classname]
             #if dump: pprint(vars(classinfo))
             if self.isconstructor:
-                py_name = 'cv.' + classinfo.wname
-            elif self.is_static:
-                py_name = '.'.join([self.namespace, classinfo.sname + '_' + self.variants[0].wname])
+                py_name = classinfo.full_export_name
             else:
+                py_name = classinfo.full_export_name + "." + self.variants[0].wname
+
+            if not self.is_static:
                 cname = classinfo.cname + '::' + cname
-                py_name = 'cv.' + classinfo.wname + '.' + self.variants[0].wname
         else:
             py_name = '.'.join([self.namespace, self.variants[0].wname])
         #if dump: print(cname + " => " + py_name)
@@ -858,7 +928,7 @@ class PythonWrapperGenerator(object):
         self.class_idx = 0
 
     def add_class(self, stype, name, decl):
-        classinfo = ClassInfo(name, decl)
+        classinfo = ClassInfo(name, decl, self)
         classinfo.decl_idx = self.class_idx
         self.class_idx += 1
 
@@ -868,15 +938,29 @@ class PythonWrapperGenerator(object):
             sys.exit(-1)
         self.classes[classinfo.name] = classinfo
 
-        # Add Class to json file.
-        namespace, classes, name = self.split_decl_name(name)
+        namespace, _, _ = self.split_decl_name(name)
         namespace = '.'.join(namespace)
-        name = '_'.join(classes+[name])
+        # Registering a namespace if it is not already handled or
+        # doesn't have anything except classes defined in it
+        self.namespaces.setdefault(namespace, Namespace())
 
-        py_name = 'cv.' + classinfo.wname  # use wrapper name
+        # Add Class to json file.
+        py_name = classinfo.full_export_name  # use wrapper name
         py_signatures = self.py_signatures.setdefault(classinfo.cname, [])
         py_signatures.append(dict(name=py_name))
         #print('class: ' + classinfo.cname + " => " + py_name)
+
+    def get_export_scope_name(self, original_scope_name):
+        # Outer classes should be registered before their content - inner classes in this case
+        class_scope = self.classes.get(normalize_class_name(original_scope_name), None)
+
+        if class_scope:
+            return class_scope.full_export_name
+
+        # Otherwise it is a namespace.
+        # If something is messed up at this point - it will be revelead during
+        # library import
+        return original_scope_name
 
     def split_decl_name(self, name):
         chunks = name.split('.')
@@ -967,6 +1051,7 @@ class PythonWrapperGenerator(object):
                 w_classes.append(w_classname)
             g_wname = "_".join(w_classes+[name])
             func_map = self.namespaces.setdefault(namespace_str, Namespace()).funcs
+            # Exports static function with internal name (backward compatibility)
             func = func_map.setdefault(g_name, FuncInfo("", g_name, cname, isconstructor, namespace_str, False))
             func.add_variant(decl, isphantom)
             if g_wname != g_name:  # TODO OpenCV 5.0
@@ -1130,10 +1215,25 @@ class PythonWrapperGenerator(object):
         classlist1 = [(classinfo.decl_idx, name, classinfo) for name, classinfo in classlist]
         classlist1.sort()
 
+        published_types = set()  # ensure toposort with base classes
         for decl_idx, name, classinfo in classlist1:
             if classinfo.ismap:
                 continue
-            self.code_type_publish.write(classinfo.gen_def(self))
+            def _registerType(classinfo):
+                if classinfo.decl_idx in published_types:
+                    #print(classinfo.decl_idx, classinfo.name, ' - already published')
+                    return
+                published_types.add(classinfo.decl_idx)
+
+                if classinfo.base and classinfo.base in self.classes:
+                    base_classinfo = self.classes[classinfo.base]
+                    #print(classinfo.decl_idx, classinfo.name, ' - request publishing of base type ', base_classinfo.decl_idx, base_classinfo.name)
+                    _registerType(base_classinfo)
+
+                #print(classinfo.decl_idx, classinfo.name, ' - published!')
+                self.code_type_publish.write(classinfo.gen_def(self))
+
+            _registerType(classinfo)
 
 
         # step 3: generate the code for all the global functions
