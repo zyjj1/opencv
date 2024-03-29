@@ -116,16 +116,21 @@
 # endif
 #endif
 
-#if defined(__OPENCV_BUILD) && defined(__clang__)
-#pragma clang diagnostic ignored "-Winconsistent-missing-override"
-#endif
 #if defined(__OPENCV_BUILD) && defined(__GNUC__) && __GNUC__ >= 5
 //#pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wsuggest-override"
 #endif
+#if defined(__OPENCV_BUILD) && defined(__clang__) && ((__clang_major__*100 + __clang_minor__) >= 1301)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-copy"
+#pragma clang diagnostic ignored "-Winconsistent-missing-override"
+#endif
 #include "opencv2/ts/ts_gtest.h"
 #if defined(__OPENCV_BUILD) && defined(__GNUC__) && __GNUC__ >= 5
 //#pragma GCC diagnostic pop
+#endif
+#if defined(__OPENCV_BUILD) && defined(__clang__) && ((__clang_major__*100 + __clang_minor__) >= 1301)
+#pragma clang diagnostic pop
 #endif
 #include "opencv2/ts/ts_ext.hpp"
 
@@ -936,13 +941,9 @@ namespace opencv_test {
 using namespace cvtest;
 using namespace cv;
 
-#ifdef CV_CXX11
 #define CVTEST_GUARD_SYMBOL(name) \
     class required_namespace_specificatin_here_for_symbol_ ## name {}; \
     using name = required_namespace_specificatin_here_for_symbol_ ## name;
-#else
-#define CVTEST_GUARD_SYMBOL(name) /* nothing */
-#endif
 
 CVTEST_GUARD_SYMBOL(norm)
 CVTEST_GUARD_SYMBOL(add)

@@ -331,6 +331,37 @@ TEST(Imgcodecs_Bmp, read_32bit_xrgb)
     ASSERT_EQ(data[3], 255);
 }
 
+TEST(Imgcodecs_Bmp, rgba_scale)
+{
+    const string root = cvtest::TS::ptr()->get_data_path();
+    const string filenameInput = root + "readwrite/test_rgba_scale.bmp";
+
+    Mat img = cv::imread(filenameInput, IMREAD_UNCHANGED);
+    ASSERT_FALSE(img.empty());
+    ASSERT_EQ(CV_8UC4, img.type());
+
+    uchar* data = img.ptr();
+    ASSERT_EQ(data[0], 255);
+    ASSERT_EQ(data[1], 255);
+    ASSERT_EQ(data[2], 255);
+    ASSERT_EQ(data[3], 255);
+
+    img = cv::imread(filenameInput, IMREAD_COLOR);
+    ASSERT_FALSE(img.empty());
+    ASSERT_EQ(CV_8UC3, img.type());
+
+    data = img.ptr();
+    ASSERT_EQ(data[0], 255);
+    ASSERT_EQ(data[1], 255);
+    ASSERT_EQ(data[2], 255);
+
+    img = cv::imread(filenameInput, IMREAD_GRAYSCALE);
+    ASSERT_FALSE(img.empty());
+    ASSERT_EQ(CV_8UC1, img.type());
+
+    data = img.ptr();
+    ASSERT_EQ(data[0], 255);
+}
 
 #ifdef HAVE_IMGCODEC_HDR
 TEST(Imgcodecs_Hdr, regression)
@@ -449,6 +480,19 @@ TEST(Imgcodecs, write_parameter_type)
     cv::Matx<uchar, 10, 10> matx;
     EXPECT_NO_THROW(cv::imwrite(tmp_file, matx)) << "* Failed with cv::Matx";
     EXPECT_EQ(0, remove(tmp_file.c_str()));
+}
+
+TEST(Imgcodecs, imdecode_user_buffer)
+{
+    cv::Mat encoded = cv::Mat::zeros(1, 1024, CV_8UC1);
+    cv::Mat user_buffer(1, 1024, CV_8UC1);
+    cv::Mat result = cv::imdecode(encoded, IMREAD_ANYCOLOR, &user_buffer);
+    EXPECT_TRUE(result.empty());
+    // the function does not release user-provided buffer
+    EXPECT_FALSE(user_buffer.empty());
+
+    result = cv::imdecode(encoded, IMREAD_ANYCOLOR);
+    EXPECT_TRUE(result.empty());
 }
 
 }} // namespace

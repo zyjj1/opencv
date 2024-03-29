@@ -357,7 +357,7 @@ static RotatedRect fitEllipseNoDirect( InputArray _points )
     RotatedRect box;
 
     if( n < 5 )
-        CV_Error( CV_StsBadSize, "There should be at least 5 points to fit the ellipse" );
+        CV_Error( cv::Error::StsBadSize, "There should be at least 5 points to fit the ellipse" );
 
     // New fitellipse algorithm, contributed by Dr. Daniel Weiss
     Point2f c(0,0);
@@ -520,7 +520,7 @@ cv::RotatedRect cv::fitEllipseAMS( InputArray _points )
     RotatedRect box;
 
     if( n < 5 )
-        CV_Error( CV_StsBadSize, "There should be at least 5 points to fit the ellipse" );
+        CV_Error( cv::Error::StsBadSize, "There should be at least 5 points to fit the ellipse" );
 
     Point2f c(0,0);
 
@@ -705,7 +705,7 @@ cv::RotatedRect cv::fitEllipseDirect( InputArray _points )
     RotatedRect box;
 
     if( n < 5 )
-        CV_Error( CV_StsBadSize, "There should be at least 5 points to fit the ellipse" );
+        CV_Error( cv::Error::StsBadSize, "There should be at least 5 points to fit the ellipse" );
 
     Point2d c(0., 0.);
 
@@ -879,14 +879,14 @@ static Rect pointSetBoundingRect( const Mat& points )
     if( npoints == 0 )
         return Rect();
 
-#if CV_SIMD
+#if CV_SIMD // TODO: enable for CV_SIMD_SCALABLE, loop tail related.
     const int64_t* pts = points.ptr<int64_t>();
 
     if( !is_float )
     {
         v_int32 minval, maxval;
         minval = maxval = v_reinterpret_as_s32(vx_setall_s64(*pts)); //min[0]=pt.x, min[1]=pt.y, min[2]=pt.x, min[3]=pt.y
-        for( i = 1; i <= npoints - v_int32::nlanes/2; i+= v_int32::nlanes/2 )
+        for( i = 1; i <= npoints - VTraits<v_int32>::vlanes()/2; i+= VTraits<v_int32>::vlanes()/2 )
         {
             v_int32 ptXY2 = v_reinterpret_as_s32(vx_load(pts + i));
             minval = v_min(ptXY2, minval);
@@ -894,22 +894,22 @@ static Rect pointSetBoundingRect( const Mat& points )
         }
         minval = v_min(v_reinterpret_as_s32(v_expand_low(v_reinterpret_as_u32(minval))), v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(minval))));
         maxval = v_max(v_reinterpret_as_s32(v_expand_low(v_reinterpret_as_u32(maxval))), v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(maxval))));
-        if( i <= npoints - v_int32::nlanes/4 )
+        if( i <= npoints - VTraits<v_int32>::vlanes()/4 )
         {
             v_int32 ptXY = v_reinterpret_as_s32(v_expand_low(v_reinterpret_as_u32(vx_load_low(pts + i))));
             minval = v_min(ptXY, minval);
             maxval = v_max(ptXY, maxval);
-            i += v_int64::nlanes/2;
+            i += VTraits<v_int64>::vlanes()/2;
         }
-        for(int j = 16; j < CV_SIMD_WIDTH; j*=2)
+        for(int j = 16; j < VTraits<v_uint8>::vlanes(); j*=2)
         {
             minval = v_min(v_reinterpret_as_s32(v_expand_low(v_reinterpret_as_u32(minval))), v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(minval))));
             maxval = v_max(v_reinterpret_as_s32(v_expand_low(v_reinterpret_as_u32(maxval))), v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(maxval))));
         }
-        xmin = minval.get0();
-        xmax = maxval.get0();
-        ymin = v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(minval))).get0();
-        ymax = v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(maxval))).get0();
+        xmin = v_get0(minval);
+        xmax = v_get0(maxval);
+        ymin = v_get0(v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(minval))));
+        ymax = v_get0(v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(maxval))));
 #if CV_SIMD_WIDTH > 16
         if( i < npoints )
         {
@@ -921,18 +921,18 @@ static Rect pointSetBoundingRect( const Mat& points )
                 minval2 = v_min(ptXY, minval2);
                 maxval2 = v_max(ptXY, maxval2);
             }
-            xmin = min(xmin, minval2.get0());
-            xmax = max(xmax, maxval2.get0());
-            ymin = min(ymin, v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(minval2))).get0());
-            ymax = max(ymax, v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(maxval2))).get0());
+            xmin = min(xmin, v_get0(minval2));
+            xmax = max(xmax, v_get0(maxval2));
+            ymin = min(ymin, v_get0(v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(minval2)))));
+            ymax = max(ymax, v_get0(v_reinterpret_as_s32(v_expand_high(v_reinterpret_as_u32(maxval2)))));
         }
-#endif
+#endif // CV_SIMD
     }
     else
     {
         v_float32 minval, maxval;
         minval = maxval = v_reinterpret_as_f32(vx_setall_s64(*pts)); //min[0]=pt.x, min[1]=pt.y, min[2]=pt.x, min[3]=pt.y
-        for( i = 1; i <= npoints - v_float32::nlanes/2; i+= v_float32::nlanes/2 )
+        for( i = 1; i <= npoints - VTraits<v_float32>::vlanes()/2; i+= VTraits<v_float32>::vlanes()/2 )
         {
             v_float32 ptXY2 = v_reinterpret_as_f32(vx_load(pts + i));
             minval = v_min(ptXY2, minval);
@@ -940,22 +940,22 @@ static Rect pointSetBoundingRect( const Mat& points )
         }
         minval = v_min(v_reinterpret_as_f32(v_expand_low(v_reinterpret_as_u32(minval))), v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(minval))));
         maxval = v_max(v_reinterpret_as_f32(v_expand_low(v_reinterpret_as_u32(maxval))), v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(maxval))));
-        if( i <= npoints - v_float32::nlanes/4 )
+        if( i <= npoints - VTraits<v_float32>::vlanes()/4 )
         {
             v_float32 ptXY = v_reinterpret_as_f32(v_expand_low(v_reinterpret_as_u32(vx_load_low(pts + i))));
             minval = v_min(ptXY, minval);
             maxval = v_max(ptXY, maxval);
-            i += v_float32::nlanes/4;
+            i += VTraits<v_float32>::vlanes()/4;
         }
-        for(int j = 16; j < CV_SIMD_WIDTH; j*=2)
+        for(int j = 16; j < VTraits<v_uint8>::vlanes(); j*=2)
         {
             minval = v_min(v_reinterpret_as_f32(v_expand_low(v_reinterpret_as_u32(minval))), v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(minval))));
             maxval = v_max(v_reinterpret_as_f32(v_expand_low(v_reinterpret_as_u32(maxval))), v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(maxval))));
         }
-        xmin = cvFloor(minval.get0());
-        xmax = cvFloor(maxval.get0());
-        ymin = cvFloor(v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(minval))).get0());
-        ymax = cvFloor(v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(maxval))).get0());
+        xmin = cvFloor(v_get0(minval));
+        xmax = cvFloor(v_get0(maxval));
+        ymin = cvFloor(v_get0(v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(minval)))));
+        ymax = cvFloor(v_get0(v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(maxval)))));
 #if CV_SIMD_WIDTH > 16
         if( i < npoints )
         {
@@ -967,10 +967,10 @@ static Rect pointSetBoundingRect( const Mat& points )
                 minval2 = v_min(ptXY, minval2);
                 maxval2 = v_max(ptXY, maxval2);
             }
-            xmin = min(xmin, cvFloor(minval2.get0()));
-            xmax = max(xmax, cvFloor(maxval2.get0()));
-            ymin = min(ymin, cvFloor(v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(minval2))).get0()));
-            ymax = max(ymax, cvFloor(v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(maxval2))).get0()));
+            xmin = min(xmin, cvFloor(v_get0(minval2)));
+            xmax = max(xmax, cvFloor(v_get0(maxval2)));
+            ymin = min(ymin, cvFloor(v_get0(v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(minval2))))));
+            ymax = max(ymax, cvFloor(v_get0(v_reinterpret_as_f32(v_expand_high(v_reinterpret_as_u32(maxval2))))));
         }
 #endif
     }
@@ -1056,16 +1056,12 @@ static Rect maskBoundingRect( const Mat& img )
         for( ; j < offset; j++ )
             if( _ptr[j] )
             {
+                if( j < xmin )
+                    xmin = j;
+                if( j > xmax )
+                    xmax = j;
                 have_nz = 1;
-                break;
             }
-        if( j < offset )
-        {
-            if( j < xmin )
-                xmin = j;
-            if( j > xmax )
-                xmax = j;
-        }
         if( offset < size.width )
         {
             xmin -= offset;
@@ -1364,7 +1360,7 @@ cvContourArea( const void *array, CvSlice slice, int oriented )
     {
         contour = (CvSeq*)array;
         if( !CV_IS_SEQ_POLYLINE( contour ))
-            CV_Error( CV_StsBadArg, "Unsupported sequence type" );
+            CV_Error( cv::Error::StsBadArg, "Unsupported sequence type" );
     }
     else
     {
@@ -1379,7 +1375,7 @@ cvContourArea( const void *array, CvSlice slice, int oriented )
     }
 
     if( CV_SEQ_ELTYPE( contour ) != CV_32SC2 )
-        CV_Error( CV_StsUnsupportedFormat,
+        CV_Error( cv::Error::StsUnsupportedFormat,
         "Only curves with integer coordinates are supported in case of contour slice" );
     area = icvContourSecArea( contour, slice );
     return oriented ? area : fabs(area);
@@ -1405,7 +1401,7 @@ cvArcLength( const void *array, CvSlice slice, int is_closed )
     {
         contour = (CvSeq*)array;
         if( !CV_IS_SEQ_POLYLINE( contour ))
-            CV_Error( CV_StsBadArg, "Unsupported sequence type" );
+            CV_Error( cv::Error::StsBadArg, "Unsupported sequence type" );
         if( is_closed < 0 )
             is_closed = CV_IS_SEQ_CLOSED( contour );
     }
@@ -1498,7 +1494,7 @@ cvBoundingRect( CvArr* array, int update )
     {
         ptseq = (CvSeq*)array;
         if( !CV_IS_SEQ_POINT_SET( ptseq ))
-            CV_Error( CV_StsBadArg, "Unsupported sequence type" );
+            CV_Error( cv::Error::StsBadArg, "Unsupported sequence type" );
 
         if( ptseq->header_size < (int)sizeof(CvContour))
         {
@@ -1517,7 +1513,7 @@ cvBoundingRect( CvArr* array, int update )
         }
         else if( CV_MAT_TYPE(mat->type) != CV_8UC1 &&
                 CV_MAT_TYPE(mat->type) != CV_8SC1 )
-            CV_Error( CV_StsUnsupportedFormat,
+            CV_Error( cv::Error::StsUnsupportedFormat,
                 "The image/matrix format is not supported by the function" );
         update = 0;
         calculate = 1;

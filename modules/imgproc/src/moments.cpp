@@ -236,12 +236,12 @@ struct MomentsInTile_SIMD<uchar, int, int>
                 v_int16x8 p = v_reinterpret_as_s16(v_load_expand(ptr + x));
                 v_int16x8 sx = v_mul_wrap(qx, qx);
 
-                qx0 += v_reinterpret_as_u32(p);
+                qx0 = v_add(qx0, v_reinterpret_as_u32(p));
                 qx1 = v_reinterpret_as_u32(v_dotprod(p, qx, v_reinterpret_as_s32(qx1)));
                 qx2 = v_reinterpret_as_u32(v_dotprod(p, sx, v_reinterpret_as_s32(qx2)));
                 qx3 = v_reinterpret_as_u32(v_dotprod(v_mul_wrap(p, qx), sx, v_reinterpret_as_s32(qx3)));
 
-                qx += dx;
+                qx = v_add(qx, dx);
             }
 
             x0 = v_reduce_sum(qx0);
@@ -276,19 +276,19 @@ struct MomentsInTile_SIMD<ushort, int, int64>
             {
                 v_int32x4 v_src = v_reinterpret_as_s32(v_load_expand(ptr + x));
 
-                v_x0 += v_reinterpret_as_u32(v_src);
-                v_x1 += v_reinterpret_as_u32(v_src * v_ix0);
+                v_x0 = v_add(v_x0, v_reinterpret_as_u32(v_src));
+                v_x1 = v_add(v_x1, v_reinterpret_as_u32(v_mul(v_src, v_ix0)));
 
-                v_int32x4 v_ix1 = v_ix0 * v_ix0;
-                v_x2 += v_reinterpret_as_u32(v_src * v_ix1);
+                v_int32x4 v_ix1 = v_mul(v_ix0, v_ix0);
+                v_x2 = v_add(v_x2, v_reinterpret_as_u32(v_mul(v_src, v_ix1)));
 
-                v_ix1 = v_ix0 * v_ix1;
-                v_src = v_src * v_ix1;
+                v_ix1 = v_mul(v_ix0, v_ix1);
+                v_src = v_mul(v_src, v_ix1);
                 v_uint64x2 v_lo, v_hi;
                 v_expand(v_reinterpret_as_u32(v_src), v_lo, v_hi);
-                v_x3 += v_lo + v_hi;
+                v_x3 = v_add(v_x3, v_add(v_lo, v_hi));
 
-                v_ix0 += v_delta;
+                v_ix0 = v_add(v_ix0, v_delta);
             }
 
             x0 = v_reduce_sum(v_x0);
@@ -584,7 +584,7 @@ cv::Moments cv::moments( InputArray _src, bool binary )
         return contourMoments(mat);
 
     if( cn > 1 )
-        CV_Error( CV_StsBadArg, "Invalid image type (must be single-channel)" );
+        CV_Error( cv::Error::StsBadArg, "Invalid image type (must be single-channel)" );
 
     CV_IPP_RUN(!binary, ipp_moments(mat, m), m);
 
@@ -599,7 +599,7 @@ cv::Moments cv::moments( InputArray _src, bool binary )
     else if( depth == CV_64F )
         func = momentsInTile<double, double, double>;
     else
-        CV_Error( CV_StsUnsupportedFormat, "" );
+        CV_Error( cv::Error::StsUnsupportedFormat, "" );
 
     Mat src0(mat);
 
@@ -730,9 +730,9 @@ CV_IMPL double cvGetSpatialMoment( CvMoments * moments, int x_order, int y_order
     int order = x_order + y_order;
 
     if( !moments )
-        CV_Error( CV_StsNullPtr, "" );
+        CV_Error( cv::Error::StsNullPtr, "" );
     if( (x_order | y_order) < 0 || order > 3 )
-        CV_Error( CV_StsOutOfRange, "" );
+        CV_Error( cv::Error::StsOutOfRange, "" );
 
     return (&(moments->m00))[order + (order >> 1) + (order > 2) * 2 + y_order];
 }
@@ -743,9 +743,9 @@ CV_IMPL double cvGetCentralMoment( CvMoments * moments, int x_order, int y_order
     int order = x_order + y_order;
 
     if( !moments )
-        CV_Error( CV_StsNullPtr, "" );
+        CV_Error( cv::Error::StsNullPtr, "" );
     if( (x_order | y_order) < 0 || order > 3 )
-        CV_Error( CV_StsOutOfRange, "" );
+        CV_Error( cv::Error::StsOutOfRange, "" );
 
     return order >= 2 ? (&(moments->m00))[4 + order * 3 + y_order] :
     order == 0 ? moments->m00 : 0;
@@ -768,7 +768,7 @@ CV_IMPL double cvGetNormalizedCentralMoment( CvMoments * moments, int x_order, i
 CV_IMPL void cvGetHuMoments( CvMoments * mState, CvHuMoments * HuState )
 {
     if( !mState || !HuState )
-        CV_Error( CV_StsNullPtr, "" );
+        CV_Error( cv::Error::StsNullPtr, "" );
 
     double m00s = mState->inv_sqrt_m00, m00 = m00s * m00s, s2 = m00 * m00, s3 = s2 * m00s;
 
